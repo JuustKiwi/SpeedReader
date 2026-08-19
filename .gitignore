@@ -1,0 +1,11 @@
+# C++ compiled objects and libraries
+*.o
+*.a
+
+# Rust build directory
+/target/
+**/*.rs.bk
+
+# Editor swap files
+*.swp
+*~
