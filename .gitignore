@@ -9,3 +9,12 @@
 # Editor swap files
 *.swp
 *~
+
+
+# Added by cargo
+
+/target
+
+
+# Test pdf files
+*.pdf
