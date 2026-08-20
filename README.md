@@ -2,7 +2,7 @@
 
 This a speed reading tool that uses the Rapid Serial Visual Presentation technique with highlighting of the Optimal Recognition Point, this allows the user to read at much higher WPM than with normal reading
 
-This tool works only with PDFs
+This tool works only with .pdf , .txt and .docx files
 
 ## Requirements
 
@@ -20,7 +20,7 @@ make install
 
 ## Usagee
 
-You can read by page or by chapter, reading by chapter is more complicated since it works by extracting embedded PDF metadata, not all PDFs have the chapters stored in their metada so it doesn't always work.
+If you have a pdf file you can read by page or by chapter, reading by chapter is more complicated since it works by extracting embedded PDF metadata, not all PDFs have the chapters stored in their metada so it doesn't always work.
 
 To read by page do:
 ```bash
@@ -31,6 +31,13 @@ To read by chapter do:
 ```bash
 speedreader <path_to_pdf> -c <chapter_number>
 ```
+
+To read a txt file or a docx file:
+
+```bash
+speedreader <path_to_file>
+```
+
 
 ### In-App Controls
 * **Space**: Play / Pause

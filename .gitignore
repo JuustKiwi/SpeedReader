@@ -16,5 +16,7 @@
 /target
 
 
-# Test pdf files
+# Test files
 *.pdf
+*.txt
+*.docx

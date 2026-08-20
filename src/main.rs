@@ -4,6 +4,7 @@ use std::ffi::{ CString, CStr };
 use std::os::raw::{ c_char, c_int, c_float };
 use std::time::{ Duration, Instant };
 use std::io;
+use std::path::Path;
 
 use crossterm::{
     event::{ self, Event, KeyCode },
@@ -21,7 +22,9 @@ use ratatui::{
 
 unsafe extern "C" {
     fn load_pdf_session( file_path: *const c_char, start_page: c_int, end_page: c_int ) -> bool;
-    fn load_pdf_chapter( file_path: *const c_char, target_chapter: c_int ) -> bool; // <--- ADD THIS
+    fn load_pdf_chapter( file_path: *const c_char, target_chapter: c_int ) -> bool;
+    fn load_txt_session( file_path: *const c_char ) -> bool;
+    fn load_docx_session( file_path: *const c_char ) -> bool;
     fn get_next_word( buffer: *mut c_char, max_len: c_int, orp_index: *mut c_int, delay_multiplier: *mut c_float ) -> bool;
 }
 
@@ -74,36 +77,57 @@ fn load_config() -> ( f32, Color, Color ) {
 
 fn main() -> Result< (), io::Error > {
     let args: Vec<String> = env::args().collect();
-    
-    if args.len() < 4 {
+    if args.len() < 2 {
         eprintln!( "Usage:" );
-        eprintln!( "  By pages:   speedreader <pdf> -p <start_page> <end_page>" );
-        eprintln!( "  By chapter: speedreader <pdf> -c <chapter_num>" );
+        eprintln!( "  PDF Pages:   speedreader <file.pdf> -p <start_page> <end_page>" );
+        eprintln!( "  PDF Chapter: speedreader <file.pdf> -c <chapter_num>" );
+        eprintln!( "  Text/Word:   speedreader <file.txt | file.docx>" );
         return Ok( () );
     }
 
-    let target_pdf = &args[ 1 ];
-    let mode = &args[ 2 ];
+    let target_file = &args[ 1 ];
+    let file_path = CString::new( target_file.as_str() ).expect( "Failed to create CString" );
+    
+    // Extract the file extension to route the logic
+    let ext = Path::new( target_file )
+        .extension()
+        .and_then( |s| s.to_str() )
+        .unwrap_or( "" )
+        .to_lowercase();
+
     let mut session_words: Vec<RsvpWord> = Vec::new();
-    let file_path = CString::new( target_pdf.as_str() ).expect( "Failed to create CString" );
 
     unsafe {
-        let success = if mode == "-p" || mode == "--pages" {
-            let start: c_int = args[ 3 ].parse().unwrap_or( 1 );
-            let end: c_int = args.get( 4 ).unwrap_or( &args[ 3 ] ).parse().unwrap_or( start );
-            load_pdf_session( file_path.as_ptr(), start, end )
-        } else if mode == "-c" || mode == "--chapter" {
-            let chapter: c_int = args[ 3 ].parse().unwrap_or( 1 );
-            load_pdf_chapter( file_path.as_ptr(), chapter )
-        } else {
-            eprintln!( "Invalid mode. Use -p for pages or -c for chapter." );
-            return Ok( () );
+        let success = match ext.as_str() {
+            "txt" => load_txt_session( file_path.as_ptr() ),
+            "docx" => load_docx_session( file_path.as_ptr() ),
+            "pdf" => {
+                if args.len() < 4 {
+                    eprintln!( "PDF files require mode flags. Use -p for pages or -c for chapters." );
+                    return Ok( () );
+                }
+                let mode = &args[ 2 ];
+                if mode == "-p" || mode == "--pages" {
+                    let start: c_int = args[ 3 ].parse().unwrap_or( 1 );
+                    let end: c_int = args.get( 4 ).unwrap_or( &args[ 3 ] ).parse().unwrap_or( start );
+                    load_pdf_session( file_path.as_ptr(), start, end )
+                } else if mode == "-c" || mode == "--chapter" {
+                    let chapter: c_int = args[ 3 ].parse().unwrap_or( 1 );
+                    load_pdf_chapter( file_path.as_ptr(), chapter )
+                } else {
+                    false
+                }
+            },
+            _ => {
+                eprintln!( "Unsupported file type. Please use .pdf, .txt, or .docx" );
+                return Ok( () );
+            }
         };
 
         if !success {
-            eprintln!( "Failed to load PDF or find the specified pages/chapter." );
+            eprintln!( "Failed to load file." );
             return Ok( () );
-        }( () );
+        }
    
         let mut buffer = vec![ 0u8; 256 ];
         let mut orp_index: c_int = 0;

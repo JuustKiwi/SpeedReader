@@ -5,6 +5,8 @@
 #include <cstring>
 #include <regex>
 #include <memory>
+#include <fstream>
+#include <cstdio>
 
 #include <poppler/cpp/poppler-document.h>
 #include <poppler/cpp/poppler-page.h>
@@ -153,6 +155,53 @@ bool load_pdf_session( const char* file_path, int start_page, int end_page ) {
 	delete doc;
 	return true;
 }
+
+
+bool load_txt_session( const char* file_path ) {
+	session_words.clear();
+	current_word_index = 0;
+
+	std::ifstream file( file_path );
+	if ( !file.is_open() ) return false;
+
+	std::string word;
+	while ( file >> word ) {
+		session_words.push_back( word );
+	}
+	
+	return session_words.size() > 0;
+}
+
+
+bool load_docx_session( const char* file_path ) {
+	session_words.clear();
+	current_word_index = 0;
+
+	std::string cmd = std::string( "unzip -p \"" ) + file_path + "\" word/document.xml 2>/dev/null";
+	FILE* pipe = popen( cmd.c_str(), "r" );
+	if ( !pipe ) return false;
+
+	char buffer[ 1024 ];
+	std::string xml_data;
+	while ( fgets( buffer, sizeof( buffer ), pipe ) != nullptr ) {
+		xml_data += buffer;
+	}
+	pclose( pipe );
+
+	if ( xml_data.empty() ) return false;
+
+	std::regex xml_tags( "<[^>]+>" );
+	std::string plain_text = std::regex_replace( xml_data, xml_tags, " " );
+
+	std::istringstream iss( plain_text );
+	std::string word;
+	while ( iss >> word ) {
+		session_words.push_back( word );
+	}
+
+	return session_words.size() > 0;
+}
+
 
 bool load_pdf_chapter( const char* file_path, int target_chapter ) {
 	int start_page = -1;
