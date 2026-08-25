@@ -2,7 +2,7 @@
 
 This a speed reading tool that uses the Rapid Serial Visual Presentation technique with highlighting of the Optimal Recognition Point, this allows the user to read at much higher WPM than with normal reading
 
-This tool works only with .pdf , .txt and .docx files
+This tool works only with .pdf , .txt , .epub and .docx files
 
 ## Requirements
 

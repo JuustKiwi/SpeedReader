@@ -25,6 +25,7 @@ unsafe extern "C" {
     fn load_pdf_chapter( file_path: *const c_char, target_chapter: c_int ) -> bool;
     fn load_txt_session( file_path: *const c_char ) -> bool;
     fn load_docx_session( file_path: *const c_char ) -> bool;
+    fn load_epub_session( file_path: *const c_char ) -> bool;
     fn get_next_word( buffer: *mut c_char, max_len: c_int, orp_index: *mut c_int, delay_multiplier: *mut c_float ) -> bool;
     
     fn get_total_words() -> c_int;
@@ -83,7 +84,7 @@ fn main() -> Result< (), io::Error > {
         eprintln!( "Usage:" );
         eprintln!( "  PDF Pages:   speedreader <file.pdf> -p <start_page> <end_page>" );
         eprintln!( "  PDF Chapter: speedreader <file.pdf> -c <chapter_num>" );
-        eprintln!( "  Text/Word:   speedreader <file.txt | file.docx>" );
+        eprintln!( "  Text/Word/EPUB: speedreader <file.txt | file.docx | file.epub>" );
         eprintln!( "  Stats Mode:  speedreader <file> --stats" );
         return Ok( () );
     }
@@ -104,6 +105,7 @@ fn main() -> Result< (), io::Error > {
             let success = match ext.as_str() {
                 "txt" => load_txt_session( file_path.as_ptr() ),
                 "docx" => load_docx_session( file_path.as_ptr() ),
+                "epub" => load_epub_session( file_path.as_ptr() ),
                 "pdf" => load_pdf_session( file_path.as_ptr(), 1, 999999 ), 
                 _ => {
                     eprintln!( "Unsupported file type for stats." );
@@ -137,11 +139,11 @@ fn main() -> Result< (), io::Error > {
                 }
             }
             
-            println!( "Currenet WPM: {}", wpm );
+            println!( "Current WPM: {}", wpm );
             if hours > 0 {
                 println!( "Estimated time to read:  {} hours, {} minutes", hours, minutes );
             } else {
-                println!( "Estimated time to reead:  {} minutes", minutes );
+                println!( "Estimated time to read:  {} minutes", minutes );
             }
             println!( "----------------------------\n" );
         }
@@ -154,6 +156,7 @@ fn main() -> Result< (), io::Error > {
         let success = match ext.as_str() {
             "txt" => load_txt_session( file_path.as_ptr() ),
             "docx" => load_docx_session( file_path.as_ptr() ),
+            "epub" => load_epub_session( file_path.as_ptr() ),
             "pdf" => {
                 if args.len() < 4 {
                     eprintln!( "PDF files require mode flags for reading. Use -p for pages or -c for chapters." );
@@ -172,7 +175,7 @@ fn main() -> Result< (), io::Error > {
                 }
             },
             _ => {
-                eprintln!( "Unsupported file type. Please use .pdf, .txt, or .docx" );
+                eprintln!( "Unsupported file type. Please use .pdf, .txt, .docx, or .epub" );
                 return Ok( () );
             }
         };
