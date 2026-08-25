@@ -26,6 +26,9 @@ unsafe extern "C" {
     fn load_txt_session( file_path: *const c_char ) -> bool;
     fn load_docx_session( file_path: *const c_char ) -> bool;
     fn get_next_word( buffer: *mut c_char, max_len: c_int, orp_index: *mut c_int, delay_multiplier: *mut c_float ) -> bool;
+    
+    fn get_total_words() -> c_int;
+    fn get_pdf_chapter_count( file_path: *const c_char ) -> c_int;
 }
 
 struct RsvpWord {
@@ -48,7 +51,6 @@ fn parse_color( color_str: &str ) -> Color {
     }
 }
 
-// Reads ~/.config/speedreader.conf
 fn load_config() -> ( f32, Color, Color ) {
     let mut wpm = 350.0;
     let mut h_color = Color::Red;
@@ -82,18 +84,69 @@ fn main() -> Result< (), io::Error > {
         eprintln!( "  PDF Pages:   speedreader <file.pdf> -p <start_page> <end_page>" );
         eprintln!( "  PDF Chapter: speedreader <file.pdf> -c <chapter_num>" );
         eprintln!( "  Text/Word:   speedreader <file.txt | file.docx>" );
+        eprintln!( "  Stats Mode:  speedreader <file> --stats" );
         return Ok( () );
     }
 
     let target_file = &args[ 1 ];
     let file_path = CString::new( target_file.as_str() ).expect( "Failed to create CString" );
     
-    // Extract the file extension to route the logic
     let ext = Path::new( target_file )
         .extension()
         .and_then( |s| s.to_str() )
         .unwrap_or( "" )
         .to_lowercase();
+
+    let is_stats = args.contains( &String::from( "--stats" ) ) || args.contains( &String::from( "-s" ) );
+
+    if is_stats {
+        unsafe {
+            let success = match ext.as_str() {
+                "txt" => load_txt_session( file_path.as_ptr() ),
+                "docx" => load_docx_session( file_path.as_ptr() ),
+                "pdf" => load_pdf_session( file_path.as_ptr(), 1, 999999 ), 
+                _ => {
+                    eprintln!( "Unsupported file type for stats." );
+                    return Ok( () );
+                }
+            };
+            
+            if !success {
+                eprintln!( "Failed to load file." );
+                return Ok( () );
+            }
+
+            let total_words = get_total_words();
+            let ( wpm, _, _ ) = load_config();
+            
+            let total_minutes = total_words as f32 / wpm;
+            let hours = ( total_minutes / 60.0 ).floor() as i32;
+            let minutes = ( total_minutes % 60.0 ).round() as i32;
+
+            println!( "\n Document Stats: " );
+            println!( "----------------------------" );
+            println!( "File:  {}", target_file );
+            println!( "Words: {}", total_words );
+            
+            if ext.as_str() == "pdf" {
+                let chapters = get_pdf_chapter_count( file_path.as_ptr() );
+                if chapters > 0 {
+                    println!( "Chapters: {}", chapters );
+                } else {
+                    println!( "Chapters: None detected" );
+                }
+            }
+            
+            println!( "Currenet WPM: {}", wpm );
+            if hours > 0 {
+                println!( "Estimated time to read:  {} hours, {} minutes", hours, minutes );
+            } else {
+                println!( "Estimated time to reead:  {} minutes", minutes );
+            }
+            println!( "----------------------------\n" );
+        }
+        return Ok( () );
+    }
 
     let mut session_words: Vec<RsvpWord> = Vec::new();
 
@@ -103,7 +156,7 @@ fn main() -> Result< (), io::Error > {
             "docx" => load_docx_session( file_path.as_ptr() ),
             "pdf" => {
                 if args.len() < 4 {
-                    eprintln!( "PDF files require mode flags. Use -p for pages or -c for chapters." );
+                    eprintln!( "PDF files require mode flags for reading. Use -p for pages or -c for chapters." );
                     return Ok( () );
                 }
                 let mode = &args[ 2 ];
@@ -128,7 +181,7 @@ fn main() -> Result< (), io::Error > {
             eprintln!( "Failed to load file." );
             return Ok( () );
         }
-   
+
         let mut buffer = vec![ 0u8; 256 ];
         let mut orp_index: c_int = 0;
         let mut delay: c_float = 0.0;
@@ -149,7 +202,7 @@ fn main() -> Result< (), io::Error > {
     }
 
     if session_words.is_empty() {
-        eprintln!( "No words found in this page range." );
+        eprintln!( "No words found." );
         return Ok( () );
     }
 
@@ -200,7 +253,6 @@ fn main() -> Result< (), io::Error > {
                     .title( status_title )
                     .title_alignment( Alignment::Center )
                     .title_bottom( progress_title ) );
-
 
             let vertical_chunks = Layout::default()
                 .direction( Direction::Vertical )

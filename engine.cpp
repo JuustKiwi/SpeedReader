@@ -255,4 +255,38 @@ bool get_next_word( char* buffer, int max_len, int* orp_index, float* delay_mult
 	return true;
 }
 
+int get_pdf_chapter_count( const char* file_path ) {
+	if ( !globalParams ) {
+		globalParams = std::make_unique<GlobalParams>();
+	}
+
+	auto goo_file = std::make_unique<GooString>( file_path );
+	auto doc = std::make_unique<PDFDoc>( std::move( goo_file ) );
+
+	if ( !doc->isOk() || !doc->getOutline() ) return 0;
+
+	const auto *items = doc->getOutline()->getItems();
+	if ( !items ) return 0;
+
+	std::vector<OutlineItem*> all_items;
+	flatten_outline( items, all_items );
+
+	int count = 0;
+	std::regex chapter_regex( R"(^\s*(chapter\s+[0-9]+|chapter\s+[ivxlcdm]+|[ivxlcdm]+)\s*$)", std::regex_constants::icase );
+
+	for ( OutlineItem *item : all_items ) {
+		const std::vector<Unicode>& title_uni = item->getTitle();
+		std::string title_str;
+		for ( Unicode u : title_uni ) {
+			title_str += (char)( u & 0xFF );
+		}
+		
+		if ( std::regex_match( title_str, chapter_regex ) ) {
+			count++;
+		}
+	}
+
+	return count;
+}
+
 } // extern "C"

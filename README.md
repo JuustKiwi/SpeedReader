@@ -38,6 +38,11 @@ To read a txt file or a docx file:
 speedreader <path_to_file>
 ```
 
+You can also view the stats of the document and see the estimated time to read, this time is calculated using the default / config WPM.
+
+```bash
+speedreader <path_to_file> -s
+```
 
 ### In-App Controls
 * **Space**: Play / Pause
