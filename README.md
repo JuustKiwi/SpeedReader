@@ -4,6 +4,8 @@ This a speed reading tool that uses the Rapid Serial Visual Presentation techniq
 
 This tool works only with .pdf , .txt , .epub and .docx files
 
+This tool also has it's own .sr file type, this file type allows you to add up to 50 chapters in a book. It also remembers where you stopped reading so the next time you read it will just pickup where you stopped. Note that this also tracks when you are reading in --view mode, so if you just want to scroll through the book make sure to either add a chapter to remember where you stopped or to write it down somewhere.
+
 ## Requirements
 
 Ensure you have the following installed on your system:
@@ -20,29 +22,14 @@ make install
 
 ## Usagee
 
-If you have a pdf file you can read by page or by chapter, reading by chapter is more complicated since it works by extracting embedded PDF metadata, not all PDFs have the chapters stored in their metada so it doesn't always work.
-
-To read by page do:
-```bash
-speedreader <path_to_pdf> -p <start_page> <end_page>
-```
-
-To read by chapter do:
-```bash
-speedreader <path_to_pdf> -c <chapter_number>
-```
-
-To read a txt file or a docx file:
-
-```bash
-speedreader <path_to_file>
-```
-
-You can also view the stats of the document and see the estimated time to read, this time is calculated using the default / config WPM.
-
-```bash
-speedreader <path_to_file> -s
-```
+Read Standard:   ```bash speedreader <file> [-w <word_idx> | -p <virtual_page> | --view]```
+Read PDF:        ```bash speedreader <file.pdf> [-c <chapter> | -p <start_page> <end_page> | --view]```
+Read SR Binary:  ```bash speedreader <file.sr> [-c <chapter> | -w <word_idx> | -p <virtual_page> | --view]```
+Compile Binary:  ```bash speedreader <file> --compile <out.sr>```
+Manage Chapters: ```bash speedreader <file.sr> --add-chapter <word_idx> "<Title>"```
+List Chapters:   ```bash speedreader <file.sr> --list-chapters```
+View Stats:      ```bash speedreader <file> --stats```
+Help: 			 ```bash speedreader -h```
 
 ### In-App Controls
 * **Space**: Play / Pause

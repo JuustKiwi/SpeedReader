@@ -1,317 +1,267 @@
+mod config;
+mod ffi;
+mod ui;
+
 use std::env;
-use std::fs;
 use std::ffi::{ CString, CStr };
-use std::os::raw::{ c_char, c_int, c_float };
-use std::time::{ Duration, Instant };
 use std::io;
 use std::path::Path;
+use std::os::raw::{ c_char, c_int };
 
-use crossterm::{
-    event::{ self, Event, KeyCode },
-    execute,
-    terminal::{ disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen },
-};
-use ratatui::{
-    backend::CrosstermBackend,
-    layout::{ Alignment, Constraint, Direction, Layout },
-    style::{ Color, Style, Modifier },
-    text::{ Line, Span },
-    widgets::{ Block, Borders, Paragraph },
-    Terminal,
-};
+use crate::ffi::*;
+use crate::ui::{ run_viewer_mode, run_rsvp_mode };
 
-unsafe extern "C" {
-    fn load_pdf_session( file_path: *const c_char, start_page: c_int, end_page: c_int ) -> bool;
-    fn load_pdf_chapter( file_path: *const c_char, target_chapter: c_int ) -> bool;
-    fn load_txt_session( file_path: *const c_char ) -> bool;
-    fn load_docx_session( file_path: *const c_char ) -> bool;
-    fn load_epub_session( file_path: *const c_char ) -> bool;
-    fn get_next_word( buffer: *mut c_char, max_len: c_int, orp_index: *mut c_int, delay_multiplier: *mut c_float ) -> bool;
-    
-    fn get_total_words() -> c_int;
-    fn get_pdf_chapter_count( file_path: *const c_char ) -> c_int;
+fn print_usage() {
+    eprintln!( "Usage:" );
+    eprintln!( "  Read Standard:   speedreader <file> [-w <word_idx> | -p <virtual_page> | --view]" );
+    eprintln!( "  Read PDF:        speedreader <file.pdf> [-c <chapter> | -p <start_page> <end_page> | --view]" );
+    eprintln!( "  Read SR Binary:  speedreader <file.sr> [-c <chapter> | -w <word_idx> | -p <virtual_page> | --view]" );
+    eprintln!( "  Compile Binary:  speedreader <file> --compile <out.sr>" );
+    eprintln!( "  Manage Chapters: speedreader <file.sr> --add-chapter <word_idx> \"<Title>\"" );
+    eprintln!( "  List Chapters:   speedreader <file.sr> --list-chapters" );
+    eprintln!( "  View Stats:      speedreader <file> --stats" );
 }
 
-struct RsvpWord {
-    text: String,
-    orp_index: usize,
-    delay_mult: f32,
-}
-
-fn parse_color( color_str: &str ) -> Color {
-    match color_str.to_lowercase().as_str() {
-        "red" => Color::Red,
-        "yellow" => Color::Yellow,
-        "blue" => Color::Blue,
-        "green" => Color::Green,
-        "white" => Color::White,
-        "gray" => Color::Gray,
-        "magenta" => Color::Magenta,
-        "cyan" => Color::Cyan,
-        _ => Color::White,
+fn handle_compile( ext: &str, file_path: &CStr, out_path: &str ) {
+    let c_out = CString::new( out_path ).unwrap();
+    unsafe {
+        let loaded = match ext {
+            "txt" => load_txt_session( file_path.as_ptr() ),
+            "docx" => load_docx_session( file_path.as_ptr() ),
+            "epub" => load_epub_session( file_path.as_ptr() ),
+            "pdf" => load_pdf_session( file_path.as_ptr(), 1, 999999 ), 
+            _ => false,
+        };
+        
+        if !loaded {
+            eprintln!( "Error: Failed to load source file." );
+            return;
+        }
+        
+        if compile_sr( c_out.as_ptr() ) {
+            println!( "Successfully compiled binary to {}", out_path );
+        } else {
+            eprintln!( "Error: Compilation failed." );
+        }
     }
 }
 
-fn load_config() -> ( f32, Color, Color ) {
-    let mut wpm = 350.0;
-    let mut h_color = Color::Red;
-    let mut t_color = Color::White;
+fn handle_add_chapter( file_path: &CStr, w_idx: c_int, title: &str ) {
+    let c_title = CString::new( title ).unwrap();
+    unsafe {
+        if load_sr_session( file_path.as_ptr() ) {
+            if add_sr_chapter( c_title.as_ptr(), w_idx ) {
+                println!( "Chapter '{}' successfully added at word {}", title, w_idx );
+            } else {
+                eprintln!( "Error: Failed to add chapter. Maximum of 50 chapters reached." );
+            }
+        } else {
+            eprintln!( "Error: Failed to load binary file. Make sure it is compiled properly." );
+        }
+    }
+}
 
-    if let Ok( home ) = env::var( "HOME" ) {
-        let config_path = format!( "{}/.config/speedreader.conf", home );
-        if let Ok( content ) = fs::read_to_string( config_path ) {
-            for line in content.lines() {
-                let parts: Vec<&str> = line.split( '=' ).collect();
-                if parts.len() == 2 {
-                    let key = parts[ 0 ].trim();
-                    let val = parts[ 1 ].trim();
-                    match key {
-                        "wpm" => if let Ok( v ) = val.parse::<f32>() { wpm = v; },
-                        "highlight_color" => h_color = parse_color( val ),
-                        "text_color" => t_color = parse_color( val ),
-                        _ => {}
+fn handle_list_chapters( file_path: &CStr, target_file: &str ) {
+    unsafe {
+        if !load_sr_session( file_path.as_ptr() ) {
+            eprintln!( "Error: Failed to load .sr binary. Make sure the file exists and is compiled." );
+            return;
+        }
+        let count = get_sr_chapter_count();
+        if count == 0 {
+            println!( "No chapters found in {}.", target_file );
+            return;
+        }
+        
+        println!( "\n Chapters in {}:", target_file );
+        println!( "------------------------------------------------" );
+        for i in 0..count {
+            let c_title = get_sr_chapter_title( i );
+            let title = if c_title.is_null() { "" } else { CStr::from_ptr( c_title ).to_str().unwrap_or( "" ) };
+            let w_idx = get_sr_chapter_word_by_index( i );
+            let page = ( w_idx / 250 ) + 1;
+            println!( "  {}. {} (Word: {}, Page: {})", i + 1, title, w_idx, page );
+        }
+        println!( "------------------------------------------------\n" );
+    }
+}
+
+fn handle_stats( ext: &str, file_path: &CStr, target_file: &str ) {
+    unsafe {
+        let success = match ext {
+            "txt" => load_txt_session( file_path.as_ptr() ),
+            "docx" => load_docx_session( file_path.as_ptr() ),
+            "epub" => load_epub_session( file_path.as_ptr() ),
+            "sr" => load_sr_session( file_path.as_ptr() ),
+            "pdf" => load_pdf_session( file_path.as_ptr(), 1, 999999 ), 
+            _ => false,
+        };
+        
+        if !success { return; }
+
+        let total_words = get_total_words();
+        let ( wpm, _, _ ) = crate::config::load_config();
+        let mins = total_words as f32 / wpm;
+
+        println!( "\nDocument Statistics: " );
+        println!( "----------------------------" );
+        println!( "File:  {}", target_file );
+        println!( "Words: {}", total_words );
+        println!( "Pages: {} (Virtual 250w/pg)", total_words / 250 );
+        if ext == "pdf" { 
+            println!( "Chapters: {}", get_pdf_chapter_count( file_path.as_ptr() ) ); 
+        }
+        println!( "Speed: {} WPM", wpm );
+        println!( "Time:  {} hours, {} minutes", (mins / 60.0).floor() as i32, (mins % 60.0).round() as i32 );
+        println!( "----------------------------\n" );
+    }
+}
+
+fn load_session( ext: &str, file_path: &CStr, args: &[String] ) -> ( Vec<RsvpWord>, usize ) {
+    let mut session_words = Vec::new();
+    let mut sr_saved_index = 0;
+
+    unsafe {
+        let success = match ext {
+            "txt" => load_txt_session( file_path.as_ptr() ),
+            "docx" => load_docx_session( file_path.as_ptr() ),
+            "epub" => load_epub_session( file_path.as_ptr() ),
+            "sr" => {
+                let s = load_sr_session( file_path.as_ptr() );
+                sr_saved_index = get_sr_saved_index() as usize;
+                s
+            },
+            "pdf" => {
+                if let Some( idx ) = args.iter().position( |a| a == "-c" || a == "--chapter" ) {
+                    let chapter: c_int = args.get( idx + 1 ).and_then( |v| v.parse().ok() ).unwrap_or( 1 );
+                    load_pdf_chapter( file_path.as_ptr(), chapter )
+                } else if let Some( idx ) = args.iter().position( |a| a == "-p" || a == "--page" || a == "--pages" ) {
+                    let start: c_int = args.get( idx + 1 ).and_then( |v| v.parse().ok() ).unwrap_or( 1 );
+                    let end: c_int = args.get( idx + 2 ).and_then( |v| v.parse().ok() ).unwrap_or( start );
+                    load_pdf_session( file_path.as_ptr(), start, end )
+                } else {
+                    load_pdf_session( file_path.as_ptr(), 1, 999999 ) 
+                }
+            },
+            _ => false,
+        };
+
+        if !success { return ( session_words, sr_saved_index ); }
+
+        let mut buffer = vec![ 0u8; 256 ];
+        let mut orp = 0;
+        let mut delay = 0.0;
+
+        while get_next_word( buffer.as_mut_ptr() as *mut c_char, 256, &mut orp, &mut delay ) {
+            if let Ok( rust_str ) = CStr::from_ptr( buffer.as_ptr() as *const c_char ).to_str() {
+                session_words.push( RsvpWord { text: rust_str.to_string(), orp_index: orp as usize, delay_mult: delay } );
+            }
+        }
+    }
+    
+    ( session_words, sr_saved_index )
+}
+
+fn determine_start_index( args: &[String], ext: &str, sr_saved_index: usize, total_words: usize ) -> usize {
+    let mut start_idx = if ext == "sr" { sr_saved_index } else { 0 };
+
+    if let Some( idx ) = args.iter().position( |a| a == "-c" || a == "--chapter" ) {
+        if ext == "sr" {
+            if let Some( val ) = args.get( idx + 1 ) {
+                let chapter_num: c_int = val.parse().unwrap_or( 1 );
+                unsafe {
+                    let c_word = get_sr_chapter_word( chapter_num );
+                    if c_word != -1 {
+                        start_idx = c_word as usize;
+                    } else {
+                        eprintln!( "Warning: Chapter {} not found.", chapter_num );
                     }
                 }
             }
         }
+    } else if let Some( idx ) = args.iter().position( |a| a == "-w" || a == "--word" ) {
+        if let Some( val ) = args.get( idx + 1 ) { start_idx = val.parse().unwrap_or( 0 ); }
+    } else if let Some( idx ) = args.iter().position( |a| a == "-p" || a == "--page" || a == "--pages" ) {
+        if ext != "pdf" {
+            if let Some( val ) = args.get( idx + 1 ) {
+                let p: usize = val.parse().unwrap_or( 1 );
+                start_idx = p.saturating_sub( 1 ) * 250; 
+            }
+        }
     }
-    ( wpm, h_color, t_color )
+    
+    start_idx.min( total_words.saturating_sub( 1 ) )
 }
 
 fn main() -> Result< (), io::Error > {
     let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        eprintln!( "Usage:" );
-        eprintln!( "  PDF Pages:   speedreader <file.pdf> -p <start_page> <end_page>" );
-        eprintln!( "  PDF Chapter: speedreader <file.pdf> -c <chapter_num>" );
-        eprintln!( "  Text/Word/EPUB: speedreader <file.txt | file.docx | file.epub>" );
-        eprintln!( "  Stats Mode:  speedreader <file> --stats" );
+    
+    if args.len() < 2 || args.iter().any( |a| a == "-h" || a == "--help" ) {
+        print_usage();
         return Ok( () );
     }
 
     let target_file = &args[ 1 ];
-    let file_path = CString::new( target_file.as_str() ).expect( "Failed to create CString" );
-    
-    let ext = Path::new( target_file )
-        .extension()
-        .and_then( |s| s.to_str() )
-        .unwrap_or( "" )
-        .to_lowercase();
+    let file_path = CString::new( target_file.as_str() ).expect( "String err" );
+    let ext = Path::new( target_file ).extension().and_then( |s| s.to_str() ).unwrap_or( "" ).to_lowercase();
 
-    let is_stats = args.contains( &String::from( "--stats" ) ) || args.contains( &String::from( "-s" ) );
-
-    if is_stats {
-        unsafe {
-            let success = match ext.as_str() {
-                "txt" => load_txt_session( file_path.as_ptr() ),
-                "docx" => load_docx_session( file_path.as_ptr() ),
-                "epub" => load_epub_session( file_path.as_ptr() ),
-                "pdf" => load_pdf_session( file_path.as_ptr(), 1, 999999 ), 
-                _ => {
-                    eprintln!( "Unsupported file type for stats." );
-                    return Ok( () );
-                }
-            };
-            
-            if !success {
-                eprintln!( "Failed to load file." );
-                return Ok( () );
-            }
-
-            let total_words = get_total_words();
-            let ( wpm, _, _ ) = load_config();
-            
-            let total_minutes = total_words as f32 / wpm;
-            let hours = ( total_minutes / 60.0 ).floor() as i32;
-            let minutes = ( total_minutes % 60.0 ).round() as i32;
-
-            println!( "\n Document Stats: " );
-            println!( "----------------------------" );
-            println!( "File:  {}", target_file );
-            println!( "Words: {}", total_words );
-            
-            if ext.as_str() == "pdf" {
-                let chapters = get_pdf_chapter_count( file_path.as_ptr() );
-                if chapters > 0 {
-                    println!( "Chapters: {}", chapters );
-                } else {
-                    println!( "Chapters: None detected" );
-                }
-            }
-            
-            println!( "Current WPM: {}", wpm );
-            if hours > 0 {
-                println!( "Estimated time to read:  {} hours, {} minutes", hours, minutes );
-            } else {
-                println!( "Estimated time to read:  {} minutes", minutes );
-            }
-            println!( "----------------------------\n" );
+    if let Some( idx ) = args.iter().position( |a| a == "--compile" ) {
+        if let Some( out_path ) = args.get( idx + 1 ) {
+            handle_compile( &ext, &file_path, out_path );
+            return Ok( () ); 
         }
-        return Ok( () );
     }
 
-    let mut session_words: Vec<RsvpWord> = Vec::new();
-
-    unsafe {
-        let success = match ext.as_str() {
-            "txt" => load_txt_session( file_path.as_ptr() ),
-            "docx" => load_docx_session( file_path.as_ptr() ),
-            "epub" => load_epub_session( file_path.as_ptr() ),
-            "pdf" => {
-                if args.len() < 4 {
-                    eprintln!( "PDF files require mode flags for reading. Use -p for pages or -c for chapters." );
-                    return Ok( () );
-                }
-                let mode = &args[ 2 ];
-                if mode == "-p" || mode == "--pages" {
-                    let start: c_int = args[ 3 ].parse().unwrap_or( 1 );
-                    let end: c_int = args.get( 4 ).unwrap_or( &args[ 3 ] ).parse().unwrap_or( start );
-                    load_pdf_session( file_path.as_ptr(), start, end )
-                } else if mode == "-c" || mode == "--chapter" {
-                    let chapter: c_int = args[ 3 ].parse().unwrap_or( 1 );
-                    load_pdf_chapter( file_path.as_ptr(), chapter )
-                } else {
-                    false
-                }
-            },
-            _ => {
-                eprintln!( "Unsupported file type. Please use .pdf, .txt, .docx, or .epub" );
-                return Ok( () );
+    if let Some( idx ) = args.iter().position( |a| a == "--add-chapter" || a == "--add_chapter" || a == "-a" ) {
+        if ext != "sr" {
+            eprintln!( "Error: Chapter management is only supported for compiled .sr binary files." );
+            return Ok( () ); 
+        }
+        if args.len() > idx + 2 {
+            let w_idx: c_int = args[ idx + 1 ].parse().unwrap_or( 0 );
+            let title = &args[ idx + 2 ];
+            
+            if title.len() > 63 {
+                eprintln!( "Error: Chapter title is too long (maximum 63 bytes allowed)." );
+                return Ok( () ); 
             }
-        };
-
-        if !success {
-            eprintln!( "Failed to load file." );
+            
+            handle_add_chapter( &file_path, w_idx, title );
+            return Ok( () ); 
+        } else {
+            eprintln!( "Error: Missing arguments for --add-chapter. Expected word index and title." );
+            return Ok( () ); 
+        }
+    }
+    
+    if args.iter().any( |a| a == "--list-chapters" || a == "-l" || a == "--chapters" ) {
+        if ext != "sr" {
+            eprintln!( "Error: Chapter listing is only supported for compiled .sr binary files." );
             return Ok( () );
         }
-
-        let mut buffer = vec![ 0u8; 256 ];
-        let mut orp_index: c_int = 0;
-        let mut delay: c_float = 0.0;
-
-        loop {
-            if !get_next_word( buffer.as_mut_ptr() as *mut c_char, 256, &mut orp_index, &mut delay ) {
-                break;
-            }
-            let c_str = CStr::from_ptr( buffer.as_ptr() as *const c_char );
-            if let Ok( rust_str ) = c_str.to_str() {
-                session_words.push( RsvpWord {
-                    text: rust_str.to_string(),
-                    orp_index: orp_index as usize,
-                    delay_mult: delay,
-                } );
-            }
-        }
+        handle_list_chapters( &file_path, target_file );
+        return Ok( () ); 
     }
 
-    if session_words.is_empty() {
-        eprintln!( "No words found." );
+    if args.iter().any( |a| a == "--stats" || a == "-s" ) {
+        handle_stats( &ext, &file_path, target_file );
+        return Ok( () ); 
+    }
+
+    let ( words, sr_saved_index ) = load_session( &ext, &file_path, &args );
+    if words.is_empty() {
+        eprintln!( "No words found or failed to load file." );
         return Ok( () );
     }
 
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!( stdout, EnterAlternateScreen )?;
-    let backend = CrosstermBackend::new( stdout );
-    let mut terminal = Terminal::new( backend )?;
-
-    let mut current_idx = 0;
-    let mut is_paused = true; 
+    let start_idx = determine_start_index( &args, &ext, sr_saved_index, words.len() );
+    let is_view = args.iter().any( |a| a == "--view" || a == "-v" );
     
-    let ( mut wpm, highlight_color, text_color ) = load_config();
-    
-    let mut base_delay = Duration::from_secs_f32( 60.0 / wpm );
-    let mut active_delay = base_delay;
-    let mut last_tick = Instant::now();
-
-    loop {
-        terminal.draw( |f| {
-            let size = f.size();
-            let word = &session_words[ current_idx ];
-            
-            let chars: Vec<char> = word.text.chars().collect();
-            let orp = word.orp_index.min( chars.len().saturating_sub( 1 ) );
-
-            let left_str: String = chars[ 0..orp ].iter().collect();
-            let center_char: String = chars[ orp..orp + 1 ].iter().collect();
-            let right_str: String = chars[ orp + 1.. ].iter().collect();
-
-            let max_side = left_str.chars().count().max( right_str.chars().count() );
-            let left_padded = format!( "{:>width$}", left_str, width = max_side );
-            let right_padded = format!( "{:<width$}", right_str, width = max_side );
-
-            let text = Line::from( vec![
-                Span::styled( left_padded, Style::default().fg( text_color ) ),
-                Span::styled( center_char, Style::default().fg( highlight_color ).add_modifier( Modifier::BOLD ) ),
-                Span::styled( right_padded, Style::default().fg( text_color ) ),
-            ] );
-
-            let status_title = if is_paused { " PAUSED (Press Space) " } else { " READING " };
-            let progress_title = format!( " Word: {}/{} | WPM: {} ", current_idx + 1, session_words.len(), wpm );
-
-            let paragraph = Paragraph::new( text )
-                .alignment( Alignment::Center )
-                .block( Block::default()
-                    .borders( Borders::ALL )
-                    .title( status_title )
-                    .title_alignment( Alignment::Center )
-                    .title_bottom( progress_title ) );
-
-            let vertical_chunks = Layout::default()
-                .direction( Direction::Vertical )
-                .constraints( [
-                    Constraint::Percentage( 40 ),
-                    Constraint::Length( 3 ),
-                    Constraint::Percentage( 40 ),
-                    Constraint::Length( 1 ),
-                ] )
-                .split( size );
-
-            f.render_widget( paragraph, vertical_chunks[ 1 ] );
-
-            let controls_text = Line::from( "Controls: [Space] Play/Pause | [Up/Down] Speed | [Left/Right] Scrub | [Q] Quit" );
-            let controls_p = Paragraph::new( controls_text )
-                .alignment( Alignment::Center )
-                .style( Style::default().fg( Color::DarkGray ) );
-            
-            f.render_widget( controls_p, vertical_chunks[ 3 ] );
-        } )?;
-
-        if event::poll( Duration::from_millis( 10 ) )? {
-            if let Event::Key( key ) = event::read()? {
-                match key.code {
-                    KeyCode::Char( 'q' ) | KeyCode::Esc => break,
-                    KeyCode::Char( ' ' ) => is_paused = !is_paused,
-                    KeyCode::Left => current_idx = current_idx.saturating_sub( 10 ),
-                    KeyCode::Right => current_idx = ( current_idx + 10 ).min( session_words.len() - 1 ),
-                    KeyCode::Up => {
-                        wpm += 25.0;
-                        base_delay = Duration::from_secs_f32( 60.0 / wpm );
-                    }
-                    KeyCode::Down => {
-                        if wpm > 50.0 { 
-                            wpm -= 25.0;
-                            base_delay = Duration::from_secs_f32( 60.0 / wpm );
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        if !is_paused && last_tick.elapsed() >= active_delay {
-            current_idx += 1;
-            if current_idx >= session_words.len() {
-                break;
-            }
-            last_tick = Instant::now();
-            active_delay = Duration::from_secs_f32( base_delay.as_secs_f32() * session_words[ current_idx ].delay_mult );
-        }
+    if is_view {
+        run_viewer_mode( &words, start_idx, &ext )?;
+    } else {
+        run_rsvp_mode( &words, start_idx, &ext )?;
     }
-
-    disable_raw_mode()?;
-    execute!( terminal.backend_mut(), LeaveAlternateScreen )?;
-    terminal.show_cursor()?;
 
     Ok( () )
 }

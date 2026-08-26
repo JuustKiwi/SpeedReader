@@ -1,288 +1,191 @@
-#include <iostream>
-#include <vector>
-#include <string>
-#include <sstream>
+#include "engine.h"
 #include <cstring>
-#include <regex>
-#include <memory>
 #include <fstream>
-#include <cstdio>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 
-#include <poppler/cpp/poppler-document.h>
-#include <poppler/cpp/poppler-page.h>
+std::vector<std::string> session_words;
+size_t current_word_index = 0;
 
-#include <poppler/GlobalParams.h>
-#include <poppler/PDFDoc.h>
-#include <poppler/Outline.h>
-#include <poppler/Link.h>
-#include <poppler/goo/GooString.h>
-#include <poppler/Catalog.h>
+static void* mapped_data = nullptr;
+static size_t mapped_size = 0;
+static std::vector<const char*> mmap_words;
+static bool is_mmap_mode = false;
+static SRHeader* current_header = nullptr;
 
-static std::vector<std::string> session_words;
-static size_t current_word_index = 0;
-
-void flatten_outline( const std::vector<OutlineItem*>* items, std::vector<OutlineItem*>& flat_list ) {
-	if ( !items ) return;
-	for ( OutlineItem *item : *items ) {
-		flat_list.push_back( item );
-		if ( item->hasKids() ) {
-			item->open(); 
-			if ( item->getKids() ) {
-				flatten_outline( item->getKids(), flat_list );
-			}
-		}
-	}
-}
-
-bool get_metadata_chapter_bounds( const char* file_path, int target_chapter, int* start_page, int* end_page ) {
-	if ( !globalParams ) {
-		globalParams = std::make_unique<GlobalParams>();
-	}
-	
-	auto goo_file = std::make_unique<GooString>( file_path );
-	auto doc = std::make_unique<PDFDoc>( std::move( goo_file ) );
-	
-	if ( !doc->isOk() || !doc->getOutline() ) return false;
-	
-	const auto *items = doc->getOutline()->getItems();
-	if ( !items ) return false;
-	
-	std::vector<OutlineItem*> all_items;
-	flatten_outline( items, all_items );
-	
-	int current_chapter = 0;
-	int found_start = -1;
-	int found_end = doc->getNumPages();
-	
-	std::regex chapter_regex( R"(^\s*(chapter\s+[0-9]+|chapter\s+[ivxlcdm]+|[ivxlcdm]+)\s*$)", std::regex_constants::icase );
-
-	for ( OutlineItem *item : all_items ) {
-		const std::vector<Unicode>& title_uni = item->getTitle();
-		std::string title_str;
-		for ( Unicode u : title_uni ) {
-			title_str += (char)( u & 0xFF );
-		}
-		
-		if ( std::regex_match( title_str, chapter_regex ) ) {
-			current_chapter++;
-			
-			int page_num = -1;
-			const LinkAction *action = item->getAction();
-			if ( action && action->getKind() == actionGoTo ) {
-				const LinkGoTo *goto_action = static_cast<const LinkGoTo*>( action );
-				const LinkDest *dest = goto_action->getDest();
-				
-				std::unique_ptr<LinkDest> resolved_dest;
-				if ( !dest ) {
-					const GooString *named = goto_action->getNamedDest();
-					if ( named ) {
-						resolved_dest = doc->getCatalog()->findDest( named );
-						dest = resolved_dest.get();
-					}
-				}
-				
-				if ( dest ) {
-					page_num = dest->isPageRef() ? doc->findPage( dest->getPageRef() ) : dest->getPageNum();
-				}
-			}
-			
-			if ( current_chapter == target_chapter && page_num != -1 ) {
-				found_start = page_num;
-			} else if ( current_chapter == target_chapter + 1 && page_num != -1 ) {
-				found_end = page_num - 1; 
-				break; 
-			}
-		}
-	}
-	
-	if ( found_start != -1 ) {
-		*start_page = found_start;
-		*end_page = found_end;
-		return true;
-	}
-	return false;
+void cleanup_session() {
+    if ( mapped_data ) {
+        munmap( mapped_data, mapped_size );
+        mapped_data = nullptr;
+    }
+    mmap_words.clear();
+    session_words.clear();
+    current_word_index = 0;
+    current_header = nullptr;
+    is_mmap_mode = false;
 }
 
 extern "C" {
 
-bool load_pdf_session( const char* file_path, int start_page, int end_page ) {
-	session_words.clear();
-	current_word_index = 0;
+bool compile_sr( const char* output_path ) {
+    if ( session_words.empty() ) return false;
 
-	poppler::document* doc = poppler::document::load_from_file( file_path );
-	if ( !doc ) return false;
+    std::ofstream out( output_path, std::ios::binary );
+    if ( !out ) return false;
 
-	int total_pages = doc->pages();
-	
-	if ( start_page < 1 ) start_page = 1;
-	if ( end_page > total_pages || end_page < start_page ) end_page = total_pages;
+    SRHeader header = {};
+    header.magic[0] = 'S'; header.magic[1] = 'R'; header.magic[2] = '0'; header.magic[3] = '1';
+    header.saved_index = 0;
+    header.total_words = session_words.size();
+    header.chapter_count = 0;
 
-	for ( int i = start_page - 1; i < end_page; i++ ) {
-		poppler::page* p = doc->create_page( i );
-		if ( p ) {
-			poppler::ustring ustr = p->text();
-			std::vector<char> utf8_bytes = ustr.to_utf8();
-			std::string text( utf8_bytes.begin(), utf8_bytes.end() );
-			
-			std::istringstream iss( text );
-			std::string word;
-			while ( iss >> word ) {
-				session_words.push_back( word );
-			}
-			delete p;
-		}
-	}
-	
-	delete doc;
-	return true;
+    out.write( reinterpret_cast<const char*>( &header ), sizeof( SRHeader ) );
+
+    for ( const auto& w : session_words ) {
+        out.write( w.c_str(), w.length() );
+        char null_term = '\0';
+        out.write( &null_term, 1 );
+    }
+    
+    return true;
 }
 
-bool load_pdf_chapter( const char* file_path, int target_chapter ) {
-	int start_page = -1;
-	int end_page = -1;
-	
-	if ( get_metadata_chapter_bounds( file_path, target_chapter, &start_page, &end_page ) ) {
-		return load_pdf_session( file_path, start_page, end_page );
-	}
-	
-	return false;
+bool load_sr_session( const char* file_path ) {
+    cleanup_session();
+    is_mmap_mode = true;
+
+    int fd = open( file_path, O_RDWR );
+    if ( fd < 0 ) return false;
+
+    struct stat sb;
+    if ( fstat( fd, &sb ) == -1 ) { close( fd ); return false; }
+    mapped_size = sb.st_size;
+
+    mapped_data = mmap( nullptr, mapped_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0 );
+    close( fd ); 
+
+    if ( mapped_data == MAP_FAILED ) {
+        mapped_data = nullptr;
+        return false;
+    }
+
+    current_header = reinterpret_cast<SRHeader*>( mapped_data );
+    if ( strncmp( current_header->magic, "SR01", 4 ) != 0 ) return false;
+
+    char* payload = reinterpret_cast<char*>( mapped_data ) + sizeof( SRHeader );
+    size_t payload_size = mapped_size - sizeof( SRHeader );
+
+    char* ptr = payload;
+    char* end = payload + payload_size;
+    while ( ptr < end ) {
+        mmap_words.push_back( ptr );
+        while ( ptr < end && *ptr != '\0' ) ptr++;
+        ptr++;
+    }
+
+    current_word_index = 0;
+    return true;
 }
 
-bool load_txt_session( const char* file_path ) {
-	session_words.clear();
-	current_word_index = 0;
-
-	std::ifstream file( file_path );
-	if ( !file.is_open() ) return false;
-
-	std::string word;
-	while ( file >> word ) {
-		session_words.push_back( word );
-	}
-	
-	return session_words.size() > 0;
+void sync_sr_progress( int word_index ) {
+    if ( is_mmap_mode && current_header ) {
+        current_header->saved_index = word_index;
+        msync( mapped_data, sizeof( SRHeader ), MS_ASYNC );
+    }
 }
 
-bool load_docx_session( const char* file_path ) {
-	session_words.clear();
-	current_word_index = 0;
+bool add_sr_chapter( const char* title, int word_index ) {
+    if ( !is_mmap_mode || !current_header ) {
+        return false;
+    }
 
-	std::string cmd = std::string( "unzip -p \"" ) + file_path + "\" word/document.xml 2>/dev/null";
-	FILE* pipe = popen( cmd.c_str(), "r" );
-	if ( !pipe ) return false;
+    if ( current_header->chapter_count >= 50 ) {
+        return false;
+    }
+	
+    int idx = current_header->chapter_count;
+    current_header->chapters[ idx ].word_index = word_index;
+    strncpy( current_header->chapters[ idx ].title, title, 63 );
+    current_header->chapters[ idx ].title[ 63 ] = '\0';
+    current_header->chapter_count++;
 
-	char buffer[ 1024 ];
-	std::string xml_data;
-	while ( fgets( buffer, sizeof( buffer ), pipe ) != nullptr ) {
-		xml_data += buffer;
-	}
-	pclose( pipe );
-
-	if ( xml_data.empty() ) return false;
-
-	std::regex xml_tags( "<[^>]+>" );
-	std::string plain_text = std::regex_replace( xml_data, xml_tags, " " );
-
-	std::istringstream iss( plain_text );
-	std::string word;
-	while ( iss >> word ) {
-		session_words.push_back( word );
-	}
-
-	return session_words.size() > 0;
+    msync( mapped_data, sizeof( SRHeader ), MS_ASYNC );
+    return true;
 }
 
-bool load_epub_session( const char* file_path ) {
-	session_words.clear();
-	current_word_index = 0;
-
-	std::string cmd = std::string( "unzip -p \"" ) + file_path + "\" \"*.html\" \"*.xhtml\" \"*.htm\" 2>/dev/null";
-	FILE* pipe = popen( cmd.c_str(), "r" );
-	if ( !pipe ) return false;
-
-	char buffer[ 2048 ];
-	std::string html_data;
-	while ( fgets( buffer, sizeof( buffer ), pipe ) != nullptr ) {
-		html_data += buffer;
-	}
-	pclose( pipe );
-
-	if ( html_data.empty() ) return false;
-
-	std::regex html_tags( "<[^>]+>" );
-	std::string plain_text = std::regex_replace( html_data, html_tags, " " );
-
-	std::istringstream iss( plain_text );
-	std::string word;
-	while ( iss >> word ) {
-		session_words.push_back( word );
-	}
-
-	return session_words.size() > 0;
+int get_sr_saved_index() {
+    if ( is_mmap_mode && current_header ) return current_header->saved_index;
+       return 0;
 }
 
-int get_pdf_chapter_count( const char* file_path ) {
-	if ( !globalParams ) {
-		globalParams = std::make_unique<GlobalParams>();
-	}
-	
-	auto goo_file = std::make_unique<GooString>( file_path );
-	auto doc = std::make_unique<PDFDoc>( std::move( goo_file ) );
-	
-	if ( !doc->isOk() || !doc->getOutline() ) return 0;
-	
-	const auto *items = doc->getOutline()->getItems();
-	if ( !items ) return 0;
-	
-	std::vector<OutlineItem*> all_items;
-	flatten_outline( items, all_items );
-	
-	int count = 0;
-	std::regex chapter_regex( R"(^\s*(chapter\s+[0-9]+|chapter\s+[ivxlcdm]+|[ivxlcdm]+)\s*$)", std::regex_constants::icase );
+int get_sr_chapter_word( int chapter_num ) {
+    if ( !is_mmap_mode || !current_header ) {
+        return -1;
+    }
 
-	for ( OutlineItem *item : all_items ) {
-		const std::vector<Unicode>& title_uni = item->getTitle();
-		std::string title_str;
-		for ( Unicode u : title_uni ) {
-			title_str += (char)( u & 0xFF );
-		}
-		
-		if ( std::regex_match( title_str, chapter_regex ) ) {
-			count++;
-		}
-	}
 	
-	return count;
+    if ( chapter_num >= 1 && chapter_num <= (int)current_header->chapter_count ) {
+        return current_header->chapters[ chapter_num - 1 ].word_index;
+    }
+
+    return -1;
+}
+
+int get_sr_chapter_count() {
+    if ( is_mmap_mode && current_header ) return current_header->chapter_count;
+    return 0;
+}
+
+const char* get_sr_chapter_title( int index ) {
+    if ( is_mmap_mode && current_header && index >= 0 && index < (int)current_header->chapter_count ) {
+        return current_header->chapters[ index ].title;
+    }
+    return "";
+}
+
+int get_sr_chapter_word_by_index( int index ) {
+    if ( is_mmap_mode && current_header && index >= 0 && index < (int)current_header->chapter_count ) {
+        return current_header->chapters[ index ].word_index;
+    }
+    return -1;
 }
 
 int get_total_words() {
-	return session_words.size();
+    return is_mmap_mode ? mmap_words.size() : session_words.size();
 }
 
 bool get_next_word( char* buffer, int max_len, int* orp_index, float* delay_multiplier ) {
-	if ( current_word_index >= session_words.size() ) return false;
+    size_t total = is_mmap_mode ? mmap_words.size() : session_words.size();
+    if ( current_word_index >= total ) return false;
 
-	std::string word = session_words[ current_word_index ];
-	current_word_index++;
+    std::string word;
+    if ( is_mmap_mode ) {
+        word = mmap_words[ current_word_index ];
+    } else {
+        word = session_words[ current_word_index ];
+    }
+    
+    current_word_index++;
+    int len = word.length();
+    
+    if ( len == 1 ) *orp_index = 0;
+    else if ( len <= 3 ) *orp_index = 1;
+    else if ( len <= 5 ) *orp_index = 2;
+    else if ( len <= 9 ) *orp_index = 3;
+    else *orp_index = 4;
 
-	int len = word.length();
-	
-	if ( len == 1 ) *orp_index = 0;
-	else if ( len <= 3 ) *orp_index = 1;
-	else if ( len <= 5 ) *orp_index = 2;
-	else if ( len <= 9 ) *orp_index = 3;
-	else *orp_index = 4;
+    *delay_multiplier = 1.0f;
+    char last_char = word.back();
+    
+    if ( last_char == ',' ) *delay_multiplier = 1.5f; 
+    else if ( last_char == '.' || last_char == '?' || last_char == '!' || last_char == ';' ) *delay_multiplier = 2.0f; 
 
-	*delay_multiplier = 1.0f;
-	char last_char = word.back();
-	
-	if ( last_char == ',' ) *delay_multiplier = 1.5f; 
-	else if ( last_char == '.' || last_char == '?' || last_char == '!' || last_char == ';' ) *delay_multiplier = 2.0f; 
+    strncpy( buffer, word.c_str(), max_len - 1 );
+    buffer[ max_len - 1 ] = '\0';
 
-	strncpy( buffer, word.c_str(), max_len - 1 );
-	buffer[ max_len - 1 ] = '\0';
-
-	return true;
+    return true;
 }
 
 } // extern "C"
