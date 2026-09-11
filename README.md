@@ -22,21 +22,21 @@ make install
 
 ## Usagee
 
-Read Standard:   ```bash speedreader <file> [-w <word_idx> | -p <virtual_page> | --view]```
+Read Standard:   ```speedreader <file> [-w <word_idx> | -p <virtual_page> | --view]```
 
-Read PDF:        ```bash speedreader <file.pdf> [-c <chapter> | -p <start_page> <end_page> | --view]```
+Read PDF:        ```speedreader <file.pdf> [-c <chapter> | -p <start_page> <end_page> | --view]```
 
-Read SR Binary:  ```bash speedreader <file.sr> [-c <chapter> | -w <word_idx> | -p <virtual_page> | --view]```
+Read SR Binary:  ```speedreader <file.sr> [-c <chapter> | -w <word_idx> | -p <virtual_page> | --view]```
 
-Compile Binary:  ```bash speedreader <file> --compile <out.sr>```
+Compile Binary:  ```speedreader <file> --compile <out.sr>```
 
-Manage Chapters: ```bash speedreader <file.sr> --add-chapter <word_idx> "<Title>"```
+Manage Chapters: ```speedreader <file.sr> --add-chapter <word_idx> "<Title>"```
 
-List Chapters:   ```bash speedreader <file.sr> --list-chapters```
+List Chapters:   ```speedreader <file.sr> --list-chapters```
 
-View Stats:      ```bash speedreader <file> --stats```
+View Stats:      ```speedreader <file> --stats```
 
-Help: 			 ```bash speedreader -h```
+Help: 			 ```speedreader -h```
 
 ### In-App Controls
 * **Space**: Play / Pause
