@@ -43,6 +43,7 @@ Help: 			 ```bash speedreader -h```
 * **Up / Down Arrows**: Increase or decrease reading speed
 * **Left / Right Arrows**: Go backward and forward through the text
 * **Q or Esc**: Quit the application
+* **S / F / N**: S activates slow mode that automatically jumps to a set WPM ( default is 250, but this can be changed in the config ), F is for fast mode ( default 550 ) and N will return to the normal WMP
 
 ## Configuration
 
@@ -51,6 +52,8 @@ You can customize your default WPM and the terminal UI colors by creating a conf
 Example `speedreader.conf`:
 ```ini
 wpm = 450
+slow_wpm = 250
+fast_wpm = 550
 highlight_color = cyan
 text_color = white
 ```

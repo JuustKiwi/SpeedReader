@@ -100,8 +100,8 @@ fn handle_stats( ext: &str, file_path: &CStr, target_file: &str ) {
         if !success { return; }
 
         let total_words = get_total_words();
-        let ( wpm, _, _ ) = crate::config::load_config();
-        let mins = total_words as f32 / wpm;
+        let cfg = crate::config::load_config();
+        let mins = total_words as f32 / cfg.wpm;
 
         println!( "\nDocument Statistics: " );
         println!( "----------------------------" );
@@ -111,7 +111,7 @@ fn handle_stats( ext: &str, file_path: &CStr, target_file: &str ) {
         if ext == "pdf" { 
             println!( "Chapters: {}", get_pdf_chapter_count( file_path.as_ptr() ) ); 
         }
-        println!( "Speed: {} WPM", wpm );
+        println!( "Speed: {} WPM (Slow: {}, Fast: {})", cfg.wpm, cfg.slow_wpm, cfg.fast_wpm );
         println!( "Time:  {} hours, {} minutes", (mins / 60.0).floor() as i32, (mins % 60.0).round() as i32 );
         println!( "----------------------------\n" );
     }

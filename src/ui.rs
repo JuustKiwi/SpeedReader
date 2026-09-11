@@ -161,6 +161,7 @@ pub fn run_viewer_mode( words: &[RsvpWord], start_idx: usize, ext: &str ) -> Res
     Ok( () )
 }
 
+
 pub fn run_rsvp_mode( words: &[RsvpWord], start_idx: usize, ext: &str ) -> Result< (), io::Error > {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -170,8 +171,12 @@ pub fn run_rsvp_mode( words: &[RsvpWord], start_idx: usize, ext: &str ) -> Resul
 
     let mut current_idx = start_idx;
     let mut is_paused = true; 
-    let ( mut wpm, highlight_color, text_color ) = load_config();
-    let mut base_delay = Duration::from_secs_f32( 60.0 / wpm );
+    
+    let cfg = load_config();
+    let mut current_wpm = cfg.wpm;
+    let mut normal_wpm = cfg.wpm;
+    
+    let mut base_delay = Duration::from_secs_f32( 60.0 / current_wpm );
     let mut active_delay = base_delay;
     let mut last_tick = Instant::now();
 
@@ -191,12 +196,12 @@ pub fn run_rsvp_mode( words: &[RsvpWord], start_idx: usize, ext: &str ) -> Resul
             let right_padded = format!( "{:<width$}", right_str, width = max_side );
 
             let text = Line::from( vec![
-                Span::styled( left_padded, Style::default().fg( text_color ) ),
-                Span::styled( center_char, Style::default().fg( highlight_color ).add_modifier( Modifier::BOLD ) ),
-                Span::styled( right_padded, Style::default().fg( text_color ) ),
+                Span::styled( left_padded, Style::default().fg( cfg.t_color ) ),
+                Span::styled( center_char, Style::default().fg( cfg.h_color ).add_modifier( Modifier::BOLD ) ),
+                Span::styled( right_padded, Style::default().fg( cfg.t_color ) ),
             ] );
 
-            let progress = format!( " Word: {}/{} | Page: {} | WPM: {} ", current_idx + 1, words.len(), (current_idx/250)+1, wpm );
+            let progress = format!( " Word: {}/{} | Page: {} | WPM: {} ", current_idx + 1, words.len(), (current_idx/250)+1, current_wpm );
             let paragraph = Paragraph::new( text ).alignment( Alignment::Center )
                 .block( Block::default().borders( Borders::ALL )
                 .title( if is_paused { " PAUSED " } else { " READING " } ).title_alignment( Alignment::Center )
@@ -206,7 +211,9 @@ pub fn run_rsvp_mode( words: &[RsvpWord], start_idx: usize, ext: &str ) -> Resul
                 .constraints( [ Constraint::Percentage( 40 ), Constraint::Length( 3 ), Constraint::Percentage( 40 ), Constraint::Length( 1 ) ] ).split( size );
 
             f.render_widget( paragraph, vertical_chunks[ 1 ] );
-            f.render_widget( Paragraph::new( "Controls: [Space] Play/Pause | [Up/Down] Speed | [Left/Right] Scrub | [Q] Quit" )
+            
+            let controls = "Controls: [Space] Pause | [S/N/F] Slow/Normal/Fast | [Up/Down] Speed | [Q] Quit";
+            f.render_widget( Paragraph::new( controls )
                 .alignment( Alignment::Center ).style( Style::default().fg( Color::DarkGray ) ), vertical_chunks[ 3 ] );
         } )?;
 
@@ -218,10 +225,32 @@ pub fn run_rsvp_mode( words: &[RsvpWord], start_idx: usize, ext: &str ) -> Resul
                         is_paused = !is_paused;
                         if is_paused && ext == "sr" { unsafe { sync_sr_progress( current_idx as c_int ); } }
                     },
+                    KeyCode::Char( 's' ) | KeyCode::Char( 'S' ) => { 
+                        current_wpm = cfg.slow_wpm; 
+                        base_delay = Duration::from_secs_f32( 60.0 / current_wpm ); 
+                    },
+                    KeyCode::Char( 'f' ) | KeyCode::Char( 'F' ) => { 
+                        current_wpm = cfg.fast_wpm; 
+                        base_delay = Duration::from_secs_f32( 60.0 / current_wpm ); 
+                    },
+                    KeyCode::Char( 'n' ) | KeyCode::Char( 'N' ) => { 
+                        current_wpm = normal_wpm; 
+                        base_delay = Duration::from_secs_f32( 60.0 / current_wpm ); 
+                    },
                     KeyCode::Left => current_idx = current_idx.saturating_sub( 10 ),
                     KeyCode::Right => current_idx = ( current_idx + 10 ).min( words.len() - 1 ),
-                    KeyCode::Up => { wpm += 25.0; base_delay = Duration::from_secs_f32( 60.0 / wpm ); }
-                    KeyCode::Down => { if wpm > 50.0 { wpm -= 25.0; base_delay = Duration::from_secs_f32( 60.0 / wpm ); } }
+                    KeyCode::Up => { 
+                        current_wpm += 25.0; 
+                        normal_wpm = current_wpm; 
+                        base_delay = Duration::from_secs_f32( 60.0 / current_wpm ); 
+                    }
+                    KeyCode::Down => { 
+                        if current_wpm > 50.0 { 
+                            current_wpm -= 25.0; 
+                            normal_wpm = current_wpm; 
+                            base_delay = Duration::from_secs_f32( 60.0 / current_wpm ); 
+                        } 
+                    }
                     _ => {}
                 }
             }
