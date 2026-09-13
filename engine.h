@@ -5,10 +5,14 @@
 #include <string>
 #include <cstdint>
 
+#pragma pack(push, 1)
+
 struct SRChapter {
     uint32_t word_index;
     char title[64];
 };
+
+#pragma pack(pop)
 
 struct SRHeader {
     char magic[4];           // "SR01" Identifies it as a SpeedReader file
@@ -23,6 +27,8 @@ extern std::vector<std::string> session_words;
 extern size_t current_word_index;
 
 void cleanup_session();
+
+void push_processed_word( const std::string& raw_word );
 
 // Exposed to rust
 extern "C" {

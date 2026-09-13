@@ -27,6 +27,37 @@ void cleanup_session() {
     is_mmap_mode = false;
 }
 
+void push_processed_word(const std::string& raw_word) {
+    std::string temp = "";
+    for (size_t i = 0; i < raw_word.length(); ++i) {
+        unsigned char c = raw_word[i];
+        
+        // Split on standard ASCII hyphen
+        if (c == '-') {
+            temp += c;
+            session_words.push_back(temp);
+            temp = "";
+        } 
+        // Split on UTF-8 em-dash (E2 80 94)
+        else if (c == 0xE2 && i + 2 < raw_word.length() && 
+                 (unsigned char)raw_word[i+1] == 0x80 && 
+                 (unsigned char)raw_word[i+2] == 0x94) {
+            temp += raw_word[i];
+            temp += raw_word[i+1];
+            temp += raw_word[i+2];
+            session_words.push_back(temp);
+            temp = "";
+            i += 2;
+        } else {
+            temp += c;
+        }
+    }
+    if (!temp.empty()) {
+        session_words.push_back(temp);
+    }
+}
+
+
 extern "C" {
 
 bool compile_sr( const char* output_path ) {
@@ -176,11 +207,20 @@ bool get_next_word( char* buffer, int max_len, int* orp_index, float* delay_mult
     else if ( len <= 9 ) *orp_index = 3;
     else *orp_index = 4;
 
-    *delay_multiplier = 1.0f;
-    char last_char = word.back();
+	*delay_multiplier = 1.0f;
     
-    if ( last_char == ',' ) *delay_multiplier = 1.5f; 
-    else if ( last_char == '.' || last_char == '?' || last_char == '!' || last_char == ';' ) *delay_multiplier = 2.0f; 
+    if (len > 0) {
+        char last_char = word.back();
+        if ( last_char == ',' || last_char == '-' ) *delay_multiplier = 1.5f; 
+        else if ( last_char == '.' || last_char == '?' || last_char == '!' || last_char == ';' ) *delay_multiplier = 2.0f; 
+    }
+
+    // Slowdown if the word is too big
+    if (len > 12) {
+        *delay_multiplier += 0.8f; 
+    } else if (len > 8) {
+        *delay_multiplier += 0.4f; 
+    }
 
     strncpy( buffer, word.c_str(), max_len - 1 );
     buffer[ max_len - 1 ] = '\0';
@@ -189,3 +229,4 @@ bool get_next_word( char* buffer, int max_len, int* orp_index, float* delay_mult
 }
 
 } // extern "C"
+

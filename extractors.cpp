@@ -109,7 +109,7 @@ bool load_pdf_session( const char* file_path, int start_page, int end_page ) {
             
             std::istringstream iss( text );
             std::string word;
-            while ( iss >> word ) session_words.push_back( word );
+            while ( iss >> word ) push_processed_word( word );
             delete p;
         }
     }
@@ -132,7 +132,7 @@ bool load_txt_session( const char* file_path ) {
     if ( !file.is_open() ) return false;
 
     std::string word;
-    while ( file >> word ) session_words.push_back( word );
+    while ( file >> word ) push_processed_word( word );
     return session_words.size() > 0;
 }
 
@@ -149,13 +149,15 @@ bool load_docx_session( const char* file_path ) {
 
     if ( xml_data.empty() ) return false;
 
-    std::regex xml_tags( "<[^>]+>" );
+	std::regex xml_tags( "<[^>]+>" );
     std::string plain_text = std::regex_replace( xml_data, xml_tags, " " );
+
+    std::regex html_entities( "&[^;]+;" );
+    plain_text = std::regex_replace( plain_text, html_entities, " " );
 
     std::istringstream iss( plain_text );
     std::string word;
-    while ( iss >> word ) session_words.push_back( word );
-
+    while ( iss >> word ) push_processed_word( word );
     return session_words.size() > 0;
 }
 
@@ -172,15 +174,19 @@ bool load_epub_session( const char* file_path ) {
 
     if ( html_data.empty() ) return false;
 
-    std::regex html_tags( "<[^>]+>" );
+	std::regex html_tags( "<[^>]+>" );
     std::string plain_text = std::regex_replace( html_data, html_tags, " " );
+
+    std::regex html_entities( "&[^;]+;" );
+    plain_text = std::regex_replace( plain_text, html_entities, " " );
 
     std::istringstream iss( plain_text );
     std::string word;
-    while ( iss >> word ) session_words.push_back( word );
+    while ( iss >> word ) push_processed_word( word );
 
     return session_words.size() > 0;
 }
+
 
 int get_pdf_chapter_count( const char* file_path ) {
     if ( !globalParams ) globalParams = std::make_unique<GlobalParams>();

@@ -3,7 +3,7 @@ use std::time::{ Duration, Instant };
 use std::os::raw::c_int;
 
 use crossterm::{
-    event::{ self, Event, KeyCode, MouseEventKind, MouseButton, EnableMouseCapture, DisableMouseCapture },
+    event::{ self, Event, KeyCode, KeyModifiers, MouseEventKind, MouseButton, EnableMouseCapture, DisableMouseCapture },
     execute,
     terminal::{ disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen },
 };
@@ -125,6 +125,9 @@ pub fn run_viewer_mode( words: &[RsvpWord], start_idx: usize, ext: &str ) -> Res
         if event::poll( Duration::from_millis( 50 ) )? {
             match event::read()? {
                 Event::Key( key ) => {
+                    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                        break;
+                    }
                     match key.code {
                         KeyCode::Char( 'q' ) | KeyCode::Esc => break,
                         KeyCode::Left => cursor_idx = cursor_idx.saturating_sub( 1 ),
