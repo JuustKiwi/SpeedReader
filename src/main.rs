@@ -232,6 +232,28 @@ fn determine_start_index( args: &[String], ext: &str, sr_saved_index: usize, tot
     start_idx.min( total_words.saturating_sub( 1 ) )
 }
 
+
+#[derive(Clone, Copy, PartialEq)]
+enum Action { Compile, AddChapter, ListChapters, Stats, CalcFile, CalcWords, CalcPages, Read }
+
+struct CmdDef {
+    flags: &'static [&'static str],
+    action: Action,
+    req_args: usize,
+    requires_file: bool,
+}
+
+const COMMAND_DEFS: &[CmdDef] = &[
+    CmdDef { flags: &["--compile"], action: Action::Compile, req_args: 1, requires_file: true },
+    CmdDef { flags: &["--add-chapter", "--add_chapter", "-a"], action: Action::AddChapter, req_args: 2, requires_file: true },
+    CmdDef { flags: &["--list-chapters", "-l", "--chapters"], action: Action::ListChapters, req_args: 0, requires_file: true },
+    CmdDef { flags: &["--stats", "-s"], action: Action::Stats, req_args: 0, requires_file: true },
+    CmdDef { flags: &["--calc"], action: Action::CalcFile, req_args: 1, requires_file: true },
+    CmdDef { flags: &["--calc-words", "-cw"], action: Action::CalcWords, req_args: 2, requires_file: false },
+    CmdDef { flags: &["--calc-pages", "-cp"], action: Action::CalcPages, req_args: 2, requires_file: false },
+];
+
+
 fn main() -> Result< (), io::Error > {
     let args: Vec<String> = env::args().collect();
     
@@ -240,84 +262,99 @@ fn main() -> Result< (), io::Error > {
         return Ok( () );
     }
 
-    if let Some( idx ) = args.iter().position( |a| a == "--calc-words" || a == "-cw" ) {
-        if args.len() > idx + 2 {
-            let wpm: f32 = args[ idx + 1 ].parse().unwrap_or( 350.0 );
-            let words: usize = args[ idx + 2 ].parse().unwrap_or( 0 );
-                print_time_estimate( wpm, words, "Custom Word Count" );
-        } else {
-            eprintln!( "Error: Missing arguments. Usage: speedreader -cw <wpm> <words>" );
+    let mut active_action = Action::Read;
+    let mut matched_idx = 0;
+    let mut active_def: Option<&CmdDef> = None;
+
+    for def in COMMAND_DEFS {
+        if let Some(idx) = args.iter().position(|a| def.flags.contains(&a.as_str())) {
+            active_action = def.action;
+            matched_idx = idx;
+            active_def = Some(def);
+            break;
         }
-        return Ok( () );
+    }
+
+    if let Some(def) = active_def {
+        if args.len() <= matched_idx + def.req_args {
+            eprintln!("Error: Missing arguments for {}. Expected {} argument(s).", args[matched_idx], def.req_args);
+            return Ok(());
+        }
+        
+        if def.requires_file && (args.len() < 2 || args[1].starts_with('-')) {
+            eprintln!("Error: The {} command requires a target file.", args[matched_idx]);
+            eprintln!("Usage: speedreader <file> {}", args[matched_idx]);
+            return Ok(());
+        }
+    }
+    else {
+        if args.len() < 2 || args[1].starts_with('-') {
+            eprintln!("Error: No target file provided for reading.");
+            print_usage();
+            return Ok(());
+        }
     }
     
-    if let Some( idx ) = args.iter().position( |a| a == "--calc-pages" || a == "-cp" ) {
-        if args.len() > idx + 2 {
-            let wpm: f32 = args[ idx + 1 ].parse().unwrap_or( 350.0 );
-            let pages: usize = args[ idx + 2 ].parse().unwrap_or( 0 );
-                print_time_estimate( wpm, pages * 250, "Custom Page Count" );
-        } else {
-            eprintln!( "Error: Missing arguments. Usage: speedreader -cp <wpm> <pages>" );
+    match active_action {
+        Action::CalcWords => {
+            let wpm = args[matched_idx + 1].parse().unwrap_or(350.0);
+            let words = args[matched_idx + 2].parse().unwrap_or(0);
+            print_time_estimate(wpm, words, "Custom Word Count");
+            return Ok(());
         }
-        return Ok( () );
-     }
-
-    let target_file = &args[ 1 ];
-    let file_path = CString::new( target_file.as_str() ).expect( "String err" );
-    let ext = Path::new( target_file ).extension().and_then( |s| s.to_str() ).unwrap_or( "" ).to_lowercase();
-
-	if let Some( idx ) = args.iter().position( |a| a == "--calc" ) {
-        if let Some( wpm_str ) = args.get( idx + 1 ) {
-            let wpm: f32 = wpm_str.parse().unwrap_or( 350.0 );
-            handle_calc_file( &ext, &file_path, target_file, wpm );
-        } else {
-            eprintln!( "Error: Missing WPM argument. Usage: speedreader <file> --calc <wpm>" );
+        Action::CalcPages => {
+            let wpm = args[matched_idx + 1].parse().unwrap_or(350.0);
+            let pages = args[matched_idx + 2].parse().unwrap_or(0);
+            print_time_estimate(wpm, pages * 250, "Custom Page Count");
+            return Ok(());
         }
-        return Ok( () );
+        _ => {}
     }
 
-    if let Some( idx ) = args.iter().position( |a| a == "--compile" ) {
-        if let Some( out_path ) = args.get( idx + 1 ) {
-            handle_compile( &ext, &file_path, out_path );
-            return Ok( () ); 
-        }
-    }
+    let target_file = &args[1];
+    let file_path = CString::new(target_file.as_str()).expect("String err");
+    let ext = Path::new(target_file).extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
 
-    if let Some( idx ) = args.iter().position( |a| a == "--add-chapter" || a == "--add_chapter" || a == "-a" ) {
-        if ext != "sr" {
-            eprintln!( "Error: Chapter management is only supported for compiled .sr binary files." );
-            return Ok( () ); 
+    match active_action {
+        Action::Compile => {
+            handle_compile(&ext, &file_path, &args[matched_idx + 1]);
+            return Ok(());
         }
-        if args.len() > idx + 2 {
-            let w_idx: c_int = args[ idx + 1 ].parse().unwrap_or( 0 );
-            let title = &args[ idx + 2 ];
-            
-            if title.len() > 63 {
-                eprintln!( "Error: Chapter title is too long (maximum 63 bytes allowed)." );
-                return Ok( () ); 
+        Action::AddChapter => {
+            if ext != "sr" {
+                eprintln!("Error: Chapter management is only supported for compiled .sr binary files.");
+                return Ok(());
             }
-            
-            handle_add_chapter( &file_path, w_idx, title );
-            return Ok( () ); 
-        } else {
-            eprintln!( "Error: Missing arguments for --add-chapter. Expected word index and title." );
-            return Ok( () ); 
+            let title = &args[matched_idx + 2];
+            if title.len() > 63 {
+                eprintln!("Error: Chapter title is too long (maximum 63 bytes allowed).");
+                return Ok(());
+            }
+            let w_idx = args[matched_idx + 1].parse().unwrap_or(0);
+            handle_add_chapter(&file_path, w_idx, title);
+            return Ok(());
         }
-    }
-    
-    if args.iter().any( |a| a == "--list-chapters" || a == "-l" || a == "--chapters" ) {
-        if ext != "sr" {
-            eprintln!( "Error: Chapter listing is only supported for compiled .sr binary files." );
-            return Ok( () );
+        Action::ListChapters => {
+            if ext != "sr" {
+                eprintln!("Error: Chapter listing is only supported for compiled .sr binary files.");
+                return Ok(());
+            }
+            handle_list_chapters(&file_path, target_file);
+            return Ok(());
         }
-        handle_list_chapters( &file_path, target_file );
-        return Ok( () ); 
+        Action::Stats => {
+            handle_stats(&ext, &file_path, target_file);
+            return Ok(());
+        }
+        Action::CalcFile => {
+            let wpm = args[matched_idx + 1].parse().unwrap_or(350.0);
+            handle_calc_file(&ext, &file_path, target_file, wpm);
+            return Ok(());
+        }
+        Action::Read => {}
+        _ => {}
     }
 
-    if args.iter().any( |a| a == "--stats" || a == "-s" ) {
-        handle_stats( &ext, &file_path, target_file );
-        return Ok( () ); 
-    }
 
     let ( words, sr_saved_index ) = load_session( &ext, &file_path, &args );
     if words.is_empty() {
