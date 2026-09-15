@@ -20,6 +20,9 @@ fn print_usage() {
     eprintln!( "  Manage Chapters: speedreader <file.sr> --add-chapter <word_idx> \"<Title>\"" );
     eprintln!( "  List Chapters:   speedreader <file.sr> --list-chapters" );
     eprintln!( "  View Stats:      speedreader <file> --stats" );
+    eprintln!( "  Calculate Time:  speedreader <file> --calc <wpm>" );
+    eprintln!( "  Calc Words:      speedreader --calc-words <wpm> <words> (Alias: -cw)" );
+    eprintln!( "  Calc Pages:      speedreader --calc-pages <wpm> <pages> (Alias: -cp)" );
 }
 
 fn handle_compile( ext: &str, file_path: &CStr, out_path: &str ) {
@@ -85,6 +88,42 @@ fn handle_list_chapters( file_path: &CStr, target_file: &str ) {
         println!( "------------------------------------------------\n" );
     }
 }
+
+fn print_time_estimate( wpm: f32, total_words: usize, label: &str ) {
+    let mins = total_words as f32 / wpm;
+    let hours = (mins / 60.0).floor() as i32;
+    let minutes = (mins % 60.0).round() as i32;
+
+    println!( "\nReading Estimate: {}", label );
+    println!( "--------------------------------------" );
+    println!( "Speed: {} WPM", wpm );
+    println!( "Words: {}", total_words );
+    println!( "Pages: {} (Virtual 250w/pg)", total_words / 250 );
+    println!( "Time:  {} hours, {} minutes", hours, minutes );
+    println!( "--------------------------------------\n" );
+}
+
+fn handle_calc_file( ext: &str, file_path: &CStr, target_file: &str, wpm: f32 ) {
+    unsafe {
+        let success = match ext {
+            "txt" => load_txt_session( file_path.as_ptr() ),
+            "docx" => load_docx_session( file_path.as_ptr() ),
+            "epub" => load_epub_session( file_path.as_ptr() ),
+            "sr" => load_sr_session( file_path.as_ptr() ),
+            "pdf" => load_pdf_session( file_path.as_ptr(), 1, 999999 ), 
+            _ => false,
+        };
+        
+        if !success { 
+            eprintln!( "Error: Failed to load file for calculation." );
+            return; 
+        }
+        
+        let total_words = get_total_words() as usize;
+        print_time_estimate( wpm, total_words, target_file );
+    }
+}
+
 
 fn handle_stats( ext: &str, file_path: &CStr, target_file: &str ) {
     unsafe {
@@ -201,9 +240,41 @@ fn main() -> Result< (), io::Error > {
         return Ok( () );
     }
 
+    if let Some( idx ) = args.iter().position( |a| a == "--calc-words" || a == "-cw" ) {
+        if args.len() > idx + 2 {
+            let wpm: f32 = args[ idx + 1 ].parse().unwrap_or( 350.0 );
+            let words: usize = args[ idx + 2 ].parse().unwrap_or( 0 );
+                print_time_estimate( wpm, words, "Custom Word Count" );
+        } else {
+            eprintln!( "Error: Missing arguments. Usage: speedreader -cw <wpm> <words>" );
+        }
+        return Ok( () );
+    }
+    
+    if let Some( idx ) = args.iter().position( |a| a == "--calc-pages" || a == "-cp" ) {
+        if args.len() > idx + 2 {
+            let wpm: f32 = args[ idx + 1 ].parse().unwrap_or( 350.0 );
+            let pages: usize = args[ idx + 2 ].parse().unwrap_or( 0 );
+                print_time_estimate( wpm, pages * 250, "Custom Page Count" );
+        } else {
+            eprintln!( "Error: Missing arguments. Usage: speedreader -cp <wpm> <pages>" );
+        }
+        return Ok( () );
+     }
+
     let target_file = &args[ 1 ];
     let file_path = CString::new( target_file.as_str() ).expect( "String err" );
     let ext = Path::new( target_file ).extension().and_then( |s| s.to_str() ).unwrap_or( "" ).to_lowercase();
+
+	if let Some( idx ) = args.iter().position( |a| a == "--calc" ) {
+        if let Some( wpm_str ) = args.get( idx + 1 ) {
+            let wpm: f32 = wpm_str.parse().unwrap_or( 350.0 );
+            handle_calc_file( &ext, &file_path, target_file, wpm );
+        } else {
+            eprintln!( "Error: Missing WPM argument. Usage: speedreader <file> --calc <wpm>" );
+        }
+        return Ok( () );
+    }
 
     if let Some( idx ) = args.iter().position( |a| a == "--compile" ) {
         if let Some( out_path ) = args.get( idx + 1 ) {
