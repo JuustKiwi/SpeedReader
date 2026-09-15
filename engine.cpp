@@ -14,6 +14,7 @@ static size_t mapped_size = 0;
 static std::vector<const char*> mmap_words;
 static bool is_mmap_mode = false;
 static SRHeader* current_header = nullptr;
+static bool is_read_only = false;
 
 void cleanup_session() {
     if ( mapped_data ) {
@@ -25,6 +26,7 @@ void cleanup_session() {
     current_word_index = 0;
     current_header = nullptr;
     is_mmap_mode = false;
+    is_read_only = false;
 }
 
 void push_processed_word(const std::string& raw_word) {
@@ -88,7 +90,12 @@ bool load_sr_session( const char* file_path ) {
     is_mmap_mode = true;
 
     int fd = open( file_path, O_RDWR );
-    if ( fd < 0 ) return false;
+    if ( fd < 0 ) {
+            fd = open( file_path, O_RDONLY );
+            if ( fd < 0 ) return false;
+            mmap_prot = PROT_READ; 
+            is_read_only = true;
+    }
 
     struct stat sb;
     if ( fstat( fd, &sb ) == -1 ) { close( fd ); return false; }
@@ -121,14 +128,14 @@ bool load_sr_session( const char* file_path ) {
 }
 
 void sync_sr_progress( int word_index ) {
-    if ( is_mmap_mode && current_header ) {
+    if ( is_mmap_mode && current_header && !is_read_only ) {
         current_header->saved_index = word_index;
-        msync( mapped_data, sizeof( SRHeader ), MS_ASYNC );
+        msync( mapped_data, sizeof( SRHeader ), MS_ASYNC ); 
     }
 }
 
 bool add_sr_chapter( const char* title, int word_index ) {
-    if ( !is_mmap_mode || !current_header ) {
+    if ( !is_mmap_mode || !current_header || is_read_only ) {
         return false;
     }
 

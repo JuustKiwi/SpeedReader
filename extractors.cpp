@@ -152,7 +152,7 @@ bool load_docx_session( const char* file_path ) {
 	std::regex xml_tags( "<[^>]+>" );
     std::string plain_text = std::regex_replace( xml_data, xml_tags, " " );
 
-    std::regex html_entities( "&[^;]+;" );
+	std::regex html_entities( "&[a-zA-Z0-9#]{1,10};" );
     plain_text = std::regex_replace( plain_text, html_entities, " " );
 
     std::istringstream iss( plain_text );
@@ -177,7 +177,7 @@ bool load_epub_session( const char* file_path ) {
 	std::regex html_tags( "<[^>]+>" );
     std::string plain_text = std::regex_replace( html_data, html_tags, " " );
 
-    std::regex html_entities( "&[^;]+;" );
+	std::regex html_entities( "&[a-zA-Z0-9#]{1,10};" );
     plain_text = std::regex_replace( plain_text, html_entities, " " );
 
     std::istringstream iss( plain_text );
